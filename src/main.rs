@@ -29,8 +29,8 @@ impl Message {
 async fn main() {
 
     //User table
-    let db = Arc::new(Mutex::new(HashMap::<String, User>::new()));
-    let db = warp::any().map(move || Arc::clone(&db));
+    let db_user = Arc::new(Mutex::new(HashMap::<String, User>::new()));
+    let db_user = warp::any().map(move || Arc::clone(&db_user));
 
 
     //Message table
@@ -38,26 +38,26 @@ async fn main() {
     messages.push(Message::new(String::from("I am secret 0")));
     messages.push(Message::new(String::from("I am secret 1")));
     messages.push(Message::new(String::from("I am secret 2")));
-    let messages = Arc::new(Mutex::new(messages));
-    let messages = warp::any().map(move || Arc::clone(&messages));
+    let db_messages = Arc::new(Mutex::new(messages));
+    let db_messages = warp::any().map(move || Arc::clone(&db_messages));
 
 
     let register = warp::post()
         .and(warp::path("register"))
         .and(warp::body::json())
-        .and(db.clone())
+        .and(db_user.clone())
         .and_then(register);
 
     let login = warp::post()
         .and(warp::path("login"))
         .and(warp::body::json())
-        .and(db.clone())
+        .and(db_user.clone())
         .and_then(login);
 
     let get_message = warp::get()
         .and(warp::path("get_message"))
         .and(warp::path::param::<usize>())
-        .and(messages.clone())
+        .and(db_messages.clone())
         .and_then(read_message)
         .map(|message| {
             warp::reply::json(&message)
@@ -66,7 +66,7 @@ async fn main() {
     let write_message = warp::post()
         .and(warp::path("write_message"))
         .and(warp::body::json())
-        .and(messages.clone())
+        .and(db_messages.clone())
         .and_then(write_message)
         .map(|_| {
             StatusCode::OK
@@ -80,8 +80,9 @@ async fn main() {
     //warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
 }
 
-async fn register(new_user: User, db: Arc<Mutex<HashMap<String, User>>>) -> Result<impl warp::Reply, warp::Rejection>{
-    let mut users = db.lock().await;
+// register should call login
+async fn register(new_user: User, db_users: Arc<Mutex<HashMap<String, User>>>) -> Result<impl warp::Reply, warp::Rejection>{
+    let mut users = db_users.lock().await;
     if users.contains_key(&new_user.username) {
         return Ok(warp::reply::with_status("Login already exists", StatusCode::BAD_REQUEST))
     }
@@ -89,8 +90,8 @@ async fn register(new_user: User, db: Arc<Mutex<HashMap<String, User>>>) -> Resu
     Ok(warp::reply::with_status("User created",StatusCode::CREATED))
 }
 
-async fn login(credentials: User, db: Arc<Mutex<HashMap<String, User>>>) -> Result<impl warp::Reply, warp::Rejection> {
-    let users = db.lock().await;
+async fn login(credentials: User, db_users: Arc<Mutex<HashMap<String, User>>>) -> Result<impl warp::Reply, warp::Rejection> {
+    let users = db_users.lock().await;
     match users.get(&credentials.username) {
         None => {
             Ok(warp::reply::with_status("User doesn't exist",StatusCode::BAD_REQUEST))
@@ -105,8 +106,8 @@ async fn login(credentials: User, db: Arc<Mutex<HashMap<String, User>>>) -> Resu
     }
 }
 
-async fn read_message(index: usize, messages: Arc<Mutex<Vec<Message>>>) -> Result<Message, warp::Rejection> {
-    let messages = messages.lock().await;
+async fn read_message(index: usize, db_messages: Arc<Mutex<Vec<Message>>>) -> Result<Message, warp::Rejection> {
+    let messages = db_messages.lock().await;
     match messages.get(index) {
         None => Err(warp::reject::not_found()),
         Some(message) => {
@@ -115,10 +116,8 @@ async fn read_message(index: usize, messages: Arc<Mutex<Vec<Message>>>) -> Resul
     }
 }
 
-
-
-async fn write_message(message: Message, messages: Arc::<Mutex<Vec<Message>>>) -> Result<(), warp::Rejection> {
-    let mut messages = messages.lock().await;
+async fn write_message(message: Message, db_messages: Arc::<Mutex<Vec<Message>>>) -> Result<(), warp::Rejection> {
+    let mut messages = db_messages.lock().await;
     messages.push(message);
     Ok(())
 }
