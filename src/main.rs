@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::Filter;
 use warp::http::StatusCode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // Test the server with curl with the following command
 //  curl -d '{"username":"AbsoluteVirtue", "password":"password123"}' -H "Content-Type: application/json" -X POST http://localhost:3030/register -v
@@ -14,24 +14,66 @@ struct User {
     password: String,
 }
 
+#[derive(Deserialize, Serialize, Clone)]
+struct Message {
+    message: String,
+}
+
+impl Message {
+    fn new(message: String) -> Message {
+        Message{message}
+    }
+}
+
 #[tokio::main]
 async fn main() {
+
+    //User table
     let db = Arc::new(Mutex::new(HashMap::<String, User>::new()));
     let db = warp::any().map(move || Arc::clone(&db));
+
+
+    //Message table
+    let mut messages = Vec::<Message>::new();
+    messages.push(Message::new(String::from("I am secret 0")));
+    messages.push(Message::new(String::from("I am secret 1")));
+    messages.push(Message::new(String::from("I am secret 2")));
+    let messages = Arc::new(Mutex::new(messages));
+    let messages = warp::any().map(move || Arc::clone(&messages));
+
 
     let register = warp::post()
         .and(warp::path("register"))
         .and(warp::body::json())
         .and(db.clone())
         .and_then(register);
+
     let login = warp::post()
         .and(warp::path("login"))
         .and(warp::body::json())
         .and(db.clone())
         .and_then(login);
 
-    let routes = register.or(login);
-    warp::serve(routes).run(([127, 0, 0, 1], 3030)).await;
+    let get_message = warp::get()
+        .and(warp::path("get_message"))
+        .and(warp::path::param::<usize>())
+        .and(messages.clone())
+        .and_then(read_message)
+        .map(|message| {
+            warp::reply::json(&message)
+        });
+
+    let write_message = warp::post()
+        .and(warp::path("write_message"))
+        .and(warp::body::json())
+        .and(messages.clone())
+        .and_then(write_message)
+        .map(|_| {
+            StatusCode::OK
+        });
+
+    let routes = register.or(login).or(get_message).or(write_message);
+    warp::serve(routes).run(([192, 168, 0, 10], 3030)).await;
 
     //let routes = warp::path("counter").and(db).and_then(counter);
 
@@ -41,29 +83,42 @@ async fn main() {
 async fn register(new_user: User, db: Arc<Mutex<HashMap<String, User>>>) -> Result<impl warp::Reply, warp::Rejection>{
     let mut users = db.lock().await;
     if users.contains_key(&new_user.username) {
-        println!("user already exist");
-        return Ok(StatusCode::BAD_REQUEST)
+        return Ok(warp::reply::with_status("Login already exists", StatusCode::BAD_REQUEST))
     }
     users.insert(new_user.username.clone(), new_user);
-    println!("register sucess");
-    Ok(StatusCode::CREATED)
+    Ok(warp::reply::with_status("User created",StatusCode::CREATED))
 }
 
 async fn login(credentials: User, db: Arc<Mutex<HashMap<String, User>>>) -> Result<impl warp::Reply, warp::Rejection> {
     let users = db.lock().await;
     match users.get(&credentials.username) {
         None => {
-            println!("user doesn't exist");
-            Ok(StatusCode::BAD_REQUEST)
+            Ok(warp::reply::with_status("User doesn't exist",StatusCode::BAD_REQUEST))
         },
         Some(user) => {
             if credentials.password == user.password {
-                println!("login success");
-                Ok(StatusCode::OK)
+                Ok(warp::reply::with_status("User logged in", StatusCode::OK))
             } else {
-                println!("login failed");
-                Ok(StatusCode::UNAUTHORIZED)
+                Ok(warp::reply::with_status("Bad password", StatusCode::UNAUTHORIZED))
             }
         }
     }
+}
+
+async fn read_message(index: usize, messages: Arc<Mutex<Vec<Message>>>) -> Result<Message, warp::Rejection> {
+    let messages = messages.lock().await;
+    match messages.get(index) {
+        None => Err(warp::reject::not_found()),
+        Some(message) => {
+            Ok(message.clone())
+        }
+    }
+}
+
+
+
+async fn write_message(message: Message, messages: Arc::<Mutex<Vec<Message>>>) -> Result<(), warp::Rejection> {
+    let mut messages = messages.lock().await;
+    messages.push(message);
+    Ok(())
 }
